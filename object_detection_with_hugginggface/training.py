@@ -1,5 +1,5 @@
-# USAGE train_detr.py --arch <> --path <> --epochs <>
-# For example, train_detr.py  --arch detr --path model_output --epochs 300
+# USAGE train_detr.py --arch <> --path <> --epochs <> --profile True/False
+# For example, python3.8 training.py  --arch detr --path model_output --epochs 300
 
 import torchvision
 import os
@@ -12,6 +12,7 @@ from transformers import DetrConfig, DetrForObjectDetection, DeformableDetrForOb
 from transformers import AutoModelForObjectDetection
 from transformers import AutoFeatureExtractor
 from transformers import YolosFeatureExtractor, YolosForObjectDetection
+from ptflops import get_model_complexity_info
 
 import torch
 from pytorch_lightning import Trainer
@@ -24,6 +25,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("-p", "--path", required=True,	help="output path  to the model")
 ap.add_argument('-a', '--arch', default='detr', choices=['detr', 'cond-detr', 'yolos', 'def-detr'], help='Choose different transformer based object detection architecture')
 ap.add_argument("-e", "--epochs", type=int, help="No of Epochs for training")
+ap.add_argument("-r", '--profile', default=False, type=bool, help='Profiling different model')
+
 args = vars(ap.parse_args())
 
 device = None
@@ -65,8 +68,8 @@ elif args["arch"] == 'yolos':
 elif args["arch"] == 'def-detr':
     feature_extractor = AutoFeatureExtractor.from_pretrained("SenseTime/deformable-detr")
 
-train_dataset = CocoDetection(img_folder='balloon/train', feature_extractor=feature_extractor)
-val_dataset = CocoDetection(img_folder='balloon/val', feature_extractor=feature_extractor, train=False)
+train_dataset = CocoDetection(img_folder='../custom_balloon/train2017', feature_extractor=feature_extractor)
+val_dataset = CocoDetection(img_folder='../custom_balloon/val2017', feature_extractor=feature_extractor, train=False)
 
 print("Number of training examples:", len(train_dataset))
 print("Number of validation examples:", len(val_dataset))
@@ -78,7 +81,7 @@ image_ids = train_dataset.coco.getImgIds()
 image_id = image_ids[np.random.randint(0, len(image_ids))]
 print('Image n°{}'.format(image_id))
 image = train_dataset.coco.loadImgs(image_id)[0]
-image = Image.open(os.path.join('balloon/train', image['file_name']))
+image = Image.open(os.path.join('../custom_balloon/train2017', image['file_name']))
 
 annotations = train_dataset.coco.imgToAnns[image_id]
 draw = ImageDraw.Draw(image, "RGBA")
@@ -136,7 +139,7 @@ print(pixel_values.shape)
 print(target)
 
 
-class Detr(pl.LightningModule):
+class ObjectDetector(pl.LightningModule):
      def __init__(self, lr, lr_backbone, weight_decay, architecture):
          super().__init__()
          # replace COCO classification head with custom head
@@ -213,7 +216,7 @@ class Detr(pl.LightningModule):
      def save_model(self, path):
         self.model.save_pretrained(path)
 
-class DetrYoloS(pl.LightningModule):
+class YoloS(pl.LightningModule):
     def __init__(self, lr, weight_decay):
         super().__init__()
         # replace COCO classification head with custom head
@@ -278,10 +281,10 @@ model = None
 output = None
 
 if arch == 'detr' or arch == 'cond-detr' or arch == 'def-detr':
-    model = Detr(lr=1e-4, lr_backbone=1e-5, weight_decay=1e-4, architecture=arch)
+    model = ObjectDetector(lr=1e-4, lr_backbone=1e-5, weight_decay=1e-4, architecture=arch)
     outputs = model(pixel_values=batch['pixel_values'], pixel_mask=batch['pixel_mask'])
 elif arch == 'yolos':
-    model = DetrYoloS(lr=2.5e-5, weight_decay=1e-4)
+    model = YoloS(lr=2.5e-5, weight_decay=1e-4)
     outputs = model(pixel_values=batch['pixel_values'])
 
 print("outputs.logits.shape {}".format(outputs.logits.shape))
@@ -344,11 +347,22 @@ model.eval()
 pixel_values, target = val_dataset[1]
 
 pixel_values = pixel_values.unsqueeze(0).to(device)
-print(pixel_values.shape)
+print("pixel_values.shape: {}".format(pixel_values.shape))
+
+if args["profile"]:
+    _, _, width, height = pixel_values.shape
+    print("Profiling: Input width = {}, height = {}".format(width, height))
+    input = (3, width, height)
+    print("=====START Profile With PTFLOPS========")
+    macs, params = get_model_complexity_info(model.model, input, as_strings=True,
+                                             print_per_layer_stat=True, verbose=True)
+    print('{:<30}  {:<8}'.format('Computational complexity: ', macs))
+    print('{:<30}  {:<8}'.format('Number of parameters: ', params))
+    print("=====END Profile With PTFLOPS========")
 
 if arch == 'detr' or arch == 'cond-detr':
     # forward pass to get class logits and bounding boxes
-    outputs = model(pixel_values=pixel_values, pixel_mask=None)
+    outputs = model.model(pixel_values=pixel_values, pixel_mask=None)
 elif arch == 'yolos':
     outputs = model.model(pixel_values=pixel_values)
 
@@ -415,7 +429,7 @@ def visualize_predictions(image, outputs, threshold=0.9):
 
 image_id = target['image_id'].item()
 image = val_dataset.coco.loadImgs(image_id)[0]
-image = Image.open(os.path.join('balloon/val', image['file_name']))
+image = Image.open(os.path.join('../custom_balloon/val2017', image['file_name']))
 
 
 if args['arch'] == 'detr' or args['arch'] == 'yolos':

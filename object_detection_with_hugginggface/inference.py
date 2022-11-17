@@ -1,3 +1,5 @@
+# USAGE: python3.8 inference.py --model <path where model is saved> --arch <> --save True
+# For example, python3.8 inference.py --model model_out/detr  --arch detr --save True
 import torchvision
 import os
 import numpy as np
@@ -10,13 +12,14 @@ import torch
 from transformers import DetrFeatureExtractor
 import matplotlib.pyplot as plt
 from transformers import AutoModelForObjectDetection, AutoFeatureExtractor
-
+import time
 
 import argparse
 
 ap = argparse.ArgumentParser()
 ap.add_argument("-m", "--model", required=True,	help="path to the model")
 ap.add_argument('-a', '--arch', default='detr', choices=['detr', 'cond-detr', 'yolos', 'def-detr'], help='Choose different transformer based object detection architecture')
+ap.add_argument("-s", '--save', default=False, type=bool, help='save predicted output')
 args = vars(ap.parse_args())
 
 device = torch.device("cpu")
@@ -61,8 +64,8 @@ if os.path.exists(model_path):
         model = DeformableDetrForObjectDetection.from_pretrained(model_path)
     print('Loaded {} model from this run.'.format(model_path))
 
-train_dataset = CocoDetection(img_folder='balloon/train', feature_extractor=feature_extractor)
-val_dataset = CocoDetection(img_folder='balloon/val', feature_extractor=feature_extractor, train=False)
+train_dataset = CocoDetection(img_folder='../custom_balloon/train2017', feature_extractor=feature_extractor)
+val_dataset = CocoDetection(img_folder='../custom_balloon/val2017', feature_extractor=feature_extractor, train=False)
 
 print("Number of training examples:", len(train_dataset))
 print("Number of validation examples:", len(val_dataset))
@@ -70,7 +73,7 @@ print("Number of validation examples:", len(val_dataset))
 
 cats = train_dataset.coco.cats
 id2label = {k: v['name'] for k,v in cats.items()}
-
+print("id2label: {}".format(id2label))
 
 #We can use the image_id in target to know which image it is
 pixel_values, target = val_dataset[1]
@@ -80,10 +83,17 @@ print(pixel_values.shape)
 
 if args["arch"] == 'detr' or args["arch"] == 'cond-detr' or args["arch"] == 'def-detr':
     # forward pass to get class logits and bounding boxes
+    start = time.time()
     outputs = model(pixel_values=pixel_values, pixel_mask=None)
+    end = time.time()
+    elapsed_time = (end - start) * 1000
+    print("Evaluation Time for arch: {} is {} ms ".format(args['arch'], elapsed_time))
 elif args["arch"] == 'yolos':
+    start = time.time()
     outputs = model(pixel_values=pixel_values)
-
+    end = time.time()
+    elapsed_time = (end - start) * 1000
+    print("Evaluation Time for arch: {} is {} ms ".format(args['arch'],elapsed_time))
 
 # colors for visualization
 COLORS = [[0.000, 0.447, 0.741], [0.850, 0.325, 0.098], [0.929, 0.694, 0.125],
@@ -115,7 +125,11 @@ def plot_results(pil_img, prob, boxes):
         ax.text(xmin, ymin, text, fontsize=15,
                 bbox=dict(facecolor='yellow', alpha=0.5))
     plt.axis('off')
-    plt.show()
+    if args['save']:
+        filename = "output_images/output_{}.png".format(args['arch'])
+        plt.savefig(filename, dpi=100)
+    else:
+        plt.show()
 
 def plot_output(pil_img, scores, labels, boxes):
     plt.figure(figsize=(16,10))
@@ -129,7 +143,11 @@ def plot_output(pil_img, scores, labels, boxes):
         ax.text(xmin, ymin, text, fontsize=15,
                 bbox=dict(facecolor='yellow', alpha=0.5))
     plt.axis('off')
-    plt.show()
+    if args['save']:
+        filename = "output_images/output_{}.png".format(args['arch'])
+        plt.savefig(filename, dpi=100)
+    else:
+        plt.show()
 
 def visualize_predictions(image, outputs, threshold=0.9):
   # keep only predictions with confidence >= threshold
@@ -142,9 +160,12 @@ def visualize_predictions(image, outputs, threshold=0.9):
   # plot results
   plot_results(image, probas[keep], bboxes_scaled)
 
+
 image_id = target['image_id'].item()
 image = val_dataset.coco.loadImgs(image_id)[0]
-image = Image.open(os.path.join('balloon/val', image['file_name']))
+image = Image.open(os.path.join('../custom_balloon/val2017', image['file_name']))
+#if args["save"]:
+#    image.save('original.png')
 
 if args['arch'] == 'detr' or args['arch'] == 'yolos' :
     visualize_predictions(image, outputs)
